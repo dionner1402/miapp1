@@ -1,14 +1,18 @@
 import React, { useCallback, useEffect, useState, useRef } from "react";
-import { View, Text, Button, ActivityIndicator, TouchableOpacity, TextInput, StyleSheet, Alert, AppState, FlatList,  } from "react-native";
-import MapView, { Marker } from "react-native-maps";
+import { View, Text, Button, ActivityIndicator, Dimensions, TouchableOpacity, TextInput, StyleSheet, Alert, AppState, FlatList, Animated, Image,  } from "react-native";
+import MapView, { Marker, Polyline } from "react-native-maps";
 import * as Location from "expo-location";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { formatTime, formatDate, getDistance } from './utils'; // Otros imports
 import { Geolocation } from '@react-native-community/geolocation';
-import { ScrollView } from 'react-native';
+import { ScrollView, Keyboard, } from 'react-native';
+import { useTheme } from "../context/ThemeContext";
+import { FontAwesome } from "@expo/vector-icons";
+import axios from 'axios';
 
 const HomeScreen = () => {
+const { isDarkMode } = useTheme(); // Obtener el estado del modo oscuro
   const navigation = useNavigation();
   const [location, setLocation] = useState(null);
   const [distance, setDistance] = useState<number>(0);
@@ -39,6 +43,33 @@ const HomeScreen = () => {
   const [costoGasolina, setCostoGasolina] = useState<string>("0.00");
   const [totalGastosDia, setTotalGastosDia] = useState<number>(0); // Valor inicial 0
   const [userLocation, setUserLocation] = useState(null);
+  const [isTripStarted, setIsTripStarted] = useState(false);
+  const slideAnim = useRef(new Animated.Value(0)).current;
+  const scrollViewRef = useRef(null);
+  const [routeCoordinates, setRouteCoordinates] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchedLocation, setSearchedLocation] = useState(null);
+  
+
+  
+   // Configurar la barra superior según el modo claro/oscuro
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      headerStyle: {
+        backgroundColor: isDarkMode ? '#1d2637' : '#fff', // Cambia el fondo de la barra superior
+      },
+      headerTintColor: isDarkMode ? '#FFB85A' : '#1d2637', // Cambia el color del texto de la barra superior
+    });
+  }, [navigation, isDarkMode]);
+  
+  const toggleTrip = () => {
+    setIsTripStarted((prev) => !prev);
+    Animated.timing(slideAnim, {
+      toValue: isTripStarted ? 0 : -150, // Ajusta -150 según cuánto quieras moverlo
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+  };
   
   
   // Función para cargar datos del último viaje
@@ -69,6 +100,10 @@ useFocusEffect(
     fetchLastTrip(); // Ejecuta la función al enfocarse
   }, [])
 );
+
+
+
+ 
 
 
 const mapRef = useRef(null);
@@ -153,14 +188,18 @@ const preciosGasolina = {
   diésel: 0.79,
 };
 
+
+
 const startTracking = async () => {
+Keyboard.dismiss();
   if (!price) {
     alert("Por favor, ingrese el monto cobrado antes de iniciar el viaje.");
     return;
   }
+
   setIsTracking(true);
-  setDistance(3);
-  setTime(3600);
+  setDistance(10); // Establecer distancia inicial a 0
+  setTime(3600); // Establecer tiempo inicial a 0
   setTripEnded(false);
 
   const currentTime = new Date();
@@ -168,164 +207,152 @@ const startTracking = async () => {
   setEndTime(formatTime(currentTime)); // Hora de inicio con formato
   setEndDate(formatDate(currentTime)); // Fecha de inicio con formato
 
+  // Iniciar seguimiento de la ubicación
   let watch = await Location.watchPositionAsync(
     {
       accuracy: Location.Accuracy.High,
-      timeInterval: 1000,
-      distanceInterval: 1,
+      timeInterval: 1000, // Actualiza cada 1 segundo
+      distanceInterval: 1, // Actualiza cada 1 metro
     },
     (newLocation) => {
       if (lastLocation.current) {
         const dist = getDistance(lastLocation.current.coords, newLocation.coords);
-        setDistance((prevDistance) => prevDistance + dist);
+        setDistance((prevDistance) => prevDistance + dist); // Actualizar distancia
       }
       lastLocation.current = newLocation;
-      setLocation(newLocation);
+      setLocation(newLocation); // Actualizar ubicación actual
     }
   );
   setWatchId(watch);
-  startTimer();
+  startTimer(); // Iniciar contador de tiempo
 };
 
+const stopTracking = async () => {
+  console.log("Deteniendo el seguimiento...");
 
+  if (watchId) {
+    watchId.remove(); // Detener el seguimiento de la ubicación
+  }
 
-  const stopTracking = async () => {
-    console.log("Deteniendo el seguimiento...");
+  setIsTracking(false);
+  setTripEnded(true);
 
-    if (watchId) {
-      watchId.remove();
-    }
+  const currentTime = new Date();
+  setEndTime(formatTime(currentTime)); // Hora de fin con formato
+  setEndDate(formatDate(currentTime)); // Fecha de fin con formato
 
-    setIsTracking(false);
-    setTripEnded(true);
+  console.log("Hora de fin:", currentTime.toLocaleTimeString());
+  stopTimer(); // Detener el contador de tiempo
+  await saveTrip(); // Guardar el viaje al finalizar
+};
 
-    const currentTime = new Date();
-    setEndTime(formatTime(currentTime)); // Hora de fin con formato
-    setEndDate(formatDate(currentTime)); // Fecha de fin con formato
+const getDistance = (coords1, coords2) => {
+  const rad = (x) => (x * Math.PI) / 180;
+  const R = 6371; // Radio de la Tierra en km
+  const dLat = rad(coords2.latitude - coords1.latitude);
+  const dLon = rad(coords2.longitude - coords1.longitude);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(rad(coords1.latitude)) *
+      Math.cos(rad(coords2.latitude)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c; // Distancia en km
+};
 
-    console.log("Hora de fin:", currentTime.toLocaleTimeString());
-    stopTimer();
-    await saveTrip(); // Guardar el viaje al finalizar
+const startTimer = () => {
+  timerRef.current = setInterval(() => {
+    setTime((prevTime) => prevTime + 1); // Incrementar el tiempo cada segundo
+  }, 1000);
+};
+
+const stopTimer = () => {
+  if (timerRef.current) {
+    clearInterval(timerRef.current); // Detener el temporizador
+    timerRef.current = null;
+  }
+};
+
+const handlePriceChange = (value) => {
+  setPrice(value); // Actualizar monto cobrado
+};
+
+const convertTime = (seconds) => {
+  const minutes = Math.floor(seconds / 60);
+  const sec = seconds % 60;
+  return `${minutes} min ${sec} seg`; // Convertir segundos a formato "minutos:segundos"
+};
+
+const startNewTrip = () => {
+  setDistance(0); // Resetear distancia
+  setTime(0); // Resetear tiempo
+  setPrice(""); // Resetear monto
+  setTripEnded(false); // Indicar que el viaje no ha terminado
+  setIsTracking(false); // Detener el seguimiento
+  setStartTime(null); // Resetear hora de inicio
+  setEndTime(null); // Resetear hora de fin
+  setEndDate(null); // Resetear fecha de fin
+  lastLocation.current = null; // Resetear última ubicación
+};
+
+const calculateComision = () => {
+  const comisiones = {
+    UBER: 0.10, // 10% de comisión para UBER
+    INDRIVE: 0.129, // 12.9% de comisión para INDRIVE
+    LIBRE: 0, // 0% de comisión para LIBRE
   };
+  return parseFloat(price) * comisiones[plataforma]; // Calcula la comisión en base al monto y plataforma
+};
 
-  const getDistance = (coords1, coords2) => {
-    const rad = (x) => (x * Math.PI) / 180;
-    const R = 6371; // Radio de la Tierra en km
-    const dLat = rad(coords2.latitude - coords1.latitude);
-    const dLon = rad(coords2.longitude - coords1.longitude);
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(rad(coords1.latitude)) *
-        Math.cos(rad(coords2.latitude)) *
-        Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c; // Distancia en km
-  };
-
-  const startTimer = () => {
-    timerRef.current = setInterval(() => {
-      setTime((prevTime) => prevTime + 1); // Aumentar el tiempo en 1 segundo
-    }, 1000);
-  };
-
-  const stopTimer = () => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-  };
-
-  const handlePriceChange = (value) => {
-    setPrice(value);
-  };
-
-  const convertTime = (seconds) => {
-    const minutes = Math.floor(seconds / 60);
-    const sec = seconds % 60;
-    return `${minutes} min ${sec} seg`;
-  };
-
-  const startNewTrip = () => {
-    setDistance(0);
-    setTime(0);
-    setPrice("");
-    setTripEnded(false);
-    setIsTracking(false);
-    setStartTime(null);
-    setEndTime(null);
-    setEndDate(null); // Resetear la fecha
-    lastLocation.current = null;
-  };
-
-  const calculateComision = () => {
-    const comisiones = {
-      UBER: 0.10, // 20% de comisión para UBER
-      INDRIVE: 0.129, // 12% de comisión para INDRIVE
-      LIBRE: 0, // 0% de comisión para LIBRE
-    };
-    return parseFloat(price) * comisiones[plataforma]; // Calcula la comisión
-  };
-  
-  
-  const generateId = () => {
+const generateId = () => {
   const platformInitials = plataforma === "UBER" ? "UB" : plataforma === "INDRIVE" ? "IN" : "LI";
   const timestamp = Date.now(); // Generar timestamp único
   return `${platformInitials}-${timestamp}`;
 };
 
-
-
-
-// Ejemplo de cómo guardar la plataforma seleccionada en AsyncStorage
+// Guardar la plataforma seleccionada en AsyncStorage
 const savePlataforma = async (plataformaSeleccionada) => {
   try {
-    await AsyncStorage.setItem('plataforma', plataformaSeleccionada);
+    await AsyncStorage.setItem('plataforma', plataformaSeleccionada); // Guardar en AsyncStorage
   } catch (error) {
-    console.log('Error al guardar la plataforma', error);
+    console.log('Error al guardar la plataforma', error); // Manejar errores
   }
 };
-  
-  
 
-  const saveTrip = async () => {
+const saveTrip = async () => {
   const nuevoViaje = {
     id: generateId(),
     horaInicio: startTime,
-    HoraFin: endTime,
+    horaFin: endTime,
     endDate: endDate,
     distancia: distance.toFixed(2),
     montoCobrado: price,
     plataforma: plataforma,
     comision: calculateComision().toFixed(2),
     duracion: convertTime(time),
-	
     costoMantenimiento: costoMantenimiento,
-	costoMantPorViaje: mantenimientoParcial,
-	
-	costoSeguro: costoSeguro,
-	costoSeguroPorViaje: calculateSeguroHora().toFixed(4),
+    costoMantPorViaje: mantenimientoParcial,
+    costoSeguro: costoSeguro,
+    costoSeguroPorViaje: calculateSeguroHora().toFixed(4),
     totalGastosDia: totalGastosDia,
-	
     pagoCuentaSemana: pagoCuentaSemana,
     costoCtaPorViaje: calculateCtaHora().toFixed(4),
-    
-	rentaCelular: rentaCelular,
+    rentaCelular: rentaCelular,
     costoCelPorViaje: calculateDatosHora().toFixed(4),
-    
-	consumo: (consumo / 100).toFixed(4),
+    consumo: (consumo / 100).toFixed(4),
     precioGasolina: precioGasolina,
     costoGasolina: costoGasolina,
-	kmRecorridos: kmRecorridos,
+    kmRecorridos: kmRecorridos,
   };
 
-    try {
+  try {
     const historialActual = await AsyncStorage.getItem('historialViajes');
     const historial = historialActual ? JSON.parse(historialActual) : [];
-    historial.unshift(nuevoViaje); // Agrega el nuevo viaje al inicio
-    await AsyncStorage.setItem('historialViajes', JSON.stringify(historial));
+    historial.unshift(nuevoViaje); // Agregar el nuevo viaje al inicio del historial
+    await AsyncStorage.setItem('historialViajes', JSON.stringify(historial)); // Guardar el historial actualizado
     console.log('Viaje guardado exitosamente');
   } catch (error) {
-    console.error('Error al guardar el viaje:', error);
+    console.error('Error al guardar el viaje:', error); // Manejar errores
   }
 };
 
@@ -338,69 +365,83 @@ const calculateCtaHora = (): number => {
     return 0; // O puedes mostrar un mensaje de error si es necesario
   }
 
-  const hoursInWeek = 168; // Horas en una semana (7 * 24)
+  const hoursInMonth = 30 * 24; // Total de horas en un mes (30 días)
   const durationHours = time / 3600; // Convertir de segundos a horas
-  const ctaPerHour = pagoCuentaSemana / hoursInWeek;
+  const ctaPerHour = pagoCuentaSemana / hoursInMonth; // Costo por hora basado en mensual
   const result = ctaPerHour * durationHours;
   
   const formattedResult = result.toFixed(4); // Muestra 4 decimales, por ejemplo
   console.log("Cta/hora calculado: ", formattedResult); // Ver el valor con decimales
-  
+  console.log("Duración del viaje en horas: ", durationHours); // Ver cuántas horas son
+
   return parseFloat(formattedResult); // Retorna el valor como número
 };
+
 
 
 
 // La fórmula de cálculo de renta celular parcial
 
 const calculateDatosHora = (): number => {
-  const hoursInWeek = 168; // Total de horas en una semana
+  const hoursInMonth = 30 * 24; // Total de horas en un mes (30 días)
   const durationHours = time / 3600; // Convierte el tiempo del viaje de segundos a horas
 
   // Si el usuario no ha definido "Renta Celular", asumimos 0
   if (!rentaCelular || durationHours <= 0) return 0;
 
-  const rentaPorHora = rentaCelular / hoursInWeek; // Costo por hora
-  return rentaPorHora * durationHours; // Calcula el costo proporcional al tiempo del viaje
+  const rentaPorHora = rentaCelular / hoursInMonth; // Costo por hora
+  const resultado = rentaPorHora * durationHours; // Calcula el costo proporcional al tiempo del viaje
+
+  console.log(`Renta celular por hora: ${rentaPorHora}`);
+  console.log(`Duración del viaje en horas: ${durationHours}`);
+  console.log(`Costo de renta celular para el viaje: ${resultado}`);
+
+  return resultado;
 };
+
 
 
 
 // La fórmula de cálculo del seguro
 
 const calculateSeguroHora = (): number => {
-  const hoursInWeek = 168; // Total de horas en una semana
+  const hoursInMonth = 30 * 24; // Total de horas en un mes (30 días)
   const durationHours = time / 3600; // Convierte el tiempo del viaje de segundos a horas
 
-  // Si el usuario no ha definido "Renta Celular", asumimos 0
+  // Si el usuario no ha definido "Costo Seguro", asumimos 0
   if (!costoSeguro || durationHours <= 0) return 0;
 
-  const seguroPorHora = costoSeguro / hoursInWeek; // Costo por hora
-  return seguroPorHora * durationHours; // Calcula el costo proporcional al tiempo del viaje
-};
+  const seguroPorHora = costoSeguro / hoursInMonth; // Costo por hora basado en mensual
+  const resultado = seguroPorHora * durationHours; // Calcula el costo proporcional al tiempo del viaje
 
+  console.log(`Costo seguro por hora: ${seguroPorHora}`);
+  console.log(`Duración del viaje en horas: ${durationHours}`);
+  console.log(`Costo de seguro para el viaje: ${resultado}`);
+
+  return resultado;
+};
 
 
 // La fórmula de cálculo de mantenimiento parcial
-  const calcularMantenimientoParcial = (costoMantenimiento: string, distancia: number): string => {
-  const costo = parseFloat(costoMantenimiento); // Asegúrate de que sea un número
-  if (!costo || distancia <= 0) {
-    return "0"; // Si el costo no es válido o la distancia es 0, devuelve 0
+  const calcularMantenimientoParcial = (costoMantenimiento: string, distancia: number): number => {
+  const costo = parseFloat(costoMantenimiento); // Convertimos el costo a número
+  if (isNaN(costo) || distancia <= 0) {
+    return 0; // Si el costo no es válido o la distancia es menor o igual a 0, devuelve 0
   }
   // La fórmula de cálculo del mantenimiento parcial
   const mantenimientoParcial = (costo / 5000) * distancia;
-  return mantenimientoParcial.toFixed(4); // Devolvemos el resultado con dos decimales
+  return mantenimientoParcial; // Devuelve un número
 };
 
 
-
 useEffect(() => {
-  // Calcula el mantenimiento parcial solo si la distancia está disponible y el costo de mantenimiento está definido
   if (costoMantenimiento && distance > 0) {
     const mantenimiento = calcularMantenimientoParcial(costoMantenimiento, distance);
-    setmantenimientoParcial(mantenimiento); // Guardamos el resultado en el estado
+    setmantenimientoParcial(mantenimiento); // Guardamos el resultado en el estado como número
+  } else {
+    setmantenimientoParcial(0); // Valor predeterminado
   }
-}, [costoMantenimiento, distance]); // Dependencias para que se actualice cuando la distancia o el costo cambien
+}, [costoMantenimiento, distance]);
 
 
 
@@ -416,6 +457,48 @@ useEffect(() => {
   
   
   
+  
+  // Obtener la ubicación actual
+  useEffect(() => {
+    const getLocation = async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === 'granted') {
+        const loc = await Location.getCurrentPositionAsync({});
+        setLocation(loc);
+      }
+    };
+    getLocation();
+  }, []);
+  
+  
+  // Función de geocodificación inversa para obtener la dirección
+  const reverseGeocode = async (lat, lon) => {
+    const result = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
+    return result[0] ? result[0].formattedAddress : 'Dirección no encontrada';
+  };
+
+  // Función para buscar ubicaciones (geocodificación)
+  const searchLocation = async (query) => {
+    if (!query) return;
+    const response = await axios.get(
+      `https://maps.googleapis.com/maps/api/geocode/json?address=${query}&key=AIzaSyB-hUb_4P77cc3EXmTLMLHCAO5qzi3I1FQ`
+    );
+    const location = response.data.results[0]?.geometry.location;
+    if (location) {
+      setSearchedLocation(location);
+      if (mapRef.current) {
+        mapRef.current.animateCamera({
+          center: { latitude: location.lat, longitude: location.lng },
+          zoom: 15,
+        });
+      }
+    }
+  };
+  
+  
+  
+  
+
 
 useEffect(() => {
   if (location && isTracking) {
@@ -446,8 +529,8 @@ useEffect(() => {
     useEffect(() => {
     navigation.setOptions({
       headerRight: () => (
-        <TouchableOpacity onPress={() => navigation.navigate("Perfil")}>
-          <Text style={{ fontSize: 16, paddingRight: 10, color: "blue" }}>
+        <TouchableOpacity onPress={() => navigation.navigate("Control")}>
+          <Text style={{ fontSize: 16, paddingRight: 10, color: "#FFB85A" }}>
             {plataforma}
           </Text>
         </TouchableOpacity>
@@ -455,200 +538,308 @@ useEffect(() => {
     });
   }, [plataforma]);
 
-  return (
-  <View style={{ flex: 1 }}>
-    <View style={styles.topMenu}>
-      <TouchableOpacity
-        style={styles.menuButton}
-        onPress={() => navigation.navigate("Perfil")}
-      >
-        <Text style={styles.menuButtonText}>Perfil</Text>
-      </TouchableOpacity>
 
-      <TouchableOpacity
-        style={styles.menuButton}
-        onPress={() => navigation.navigate("Historial")}
-      >
-        <Text style={styles.menuButtonText}>Historial</Text>
-      </TouchableOpacity>
 
-      <TouchableOpacity
-        style={styles.menuButton}
-        onPress={() => navigation.navigate("Gastos")}
-      >
-        <Text style={styles.menuButtonText}>Gastos</Text>
-      </TouchableOpacity>
 
-      
 
-      <TouchableOpacity
-        style={styles.menuButton}
-        onPress={() => navigation.navigate("Ingresos")}
-      >
-        <Text style={styles.menuButtonText}>Ingresos</Text>
-      </TouchableOpacity>
-    </View>
 
-{location ? (
-  <>
-    <MapView
-      ref={mapRef}
-      style={{ flex: 1 }}
-      initialRegion={{
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      }}
-      showsUserLocation={true}
-      customMapStyle={mapStyle} // Estilo nocturno
-     
-onMapReady={() => {
-  if (location && mapRef.current) {
-    mapRef.current.setCamera({
-      center: {
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-      },
-      pitch: 60, // Vista inclinada (3D)
-      heading: 0,
-      zoom: 15,
-      altitude: 500,
-    });
+
+const screenWidth = Dimensions.get('window').width; // Ancho de la pantalla
+  const imageWidth = screenWidth; // Las imágenes ocuparán todo el ancho del contenedor
+  const containerHeight = 135; // Altura del contenedor del slider
+    // Estado para controlar la imagen visible
+  const [currentIndex, setCurrentIndex] = useState(0);
+  
+  
+  // Cambiar la imagen automáticamente cada 3 segundos
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentIndex(prevIndex => (prevIndex + 1) % images.length); // Cambiar al siguiente índice, reiniciar si llegamos al final
+    }, 5000); // Cambiar cada 3 segundos
+
+    // Limpiar el intervalo al desmontar el componente
+    return () => clearInterval(interval);
+  }, []);
+
+
+// Función para ir al siguiente índice
+const goToNext = () => {
+  setCurrentIndex((prevIndex) => (prevIndex + 1) % images.length);
+};
+
+
+// Función para manejar el desplazamiento manual
+const handleScroll = (event) => {
+  const contentOffsetX = event.nativeEvent.contentOffset.x;
+  const index = Math.floor(contentOffsetX / imageWidth); // Calcular el índice basado en el desplazamiento
+  setCurrentIndex(index);
+};
+
+// Función para ir al índice anterior
+const goToPrevious = () => {
+  setCurrentIndex((prevIndex) => (prevIndex - 1 + images.length) % images.length);
+};
+
+// Asegúrate de que el FlatList se desplace al índice actual
+const flatListRef = useRef(null); // Necesitas declarar esto
+
+useEffect(() => {
+  if (flatListRef.current) {
+    flatListRef.current.scrollToIndex({ index: currentIndex, animated: true });
   }
-}}
-    >
-      <Marker
-  coordinate={{
-    latitude: location?.coords.latitude || 0,
-    longitude: location?.coords.longitude || 0,
-  }}
-  title="Ubicación Actual"
-/>
-	  
-    </MapView>
-    
-	
+}, [currentIndex]);
 
+  
+  
+  // Imagenes slider
+const images = [
+  { id: '1', src: require('../../assets/ad1.png') },
+  { id: '2', src: require('../../assets/ad2.png') },
+  { id: '3', src: require('../../assets/ad3.png') },
+];
+
+
+  return (
+  <View style={[{ flex: 1 }, { backgroundColor: isDarkMode ? '#1d2637' : '#fff' }]}>
+    {location ? (
+      <>
+        {/* Contenedor que muestra el slider de imágenes encima del mapa */}
+        <View
+          style={{
+            position: 'absolute',
+            
+			marginBottom: 50, 
+            left: 0,
+            right: 0,
+            height: containerHeight,
+            zIndex: 10,
+            backgroundColor: '#1d2637',
+            padding: 0,
+            alignItems: 'center',
+          }}>
+          <FlatList
+            ref={flatListRef}
+            data={images}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item, index }) => (
+              <View style={{ width: imageWidth, height: containerHeight, justifyContent: 'center', alignItems: 'center' }}>
+                <Image
+                  source={item.src}
+                  style={{
+                    width: imageWidth,
+                    height: containerHeight,
+                    borderRadius: 20,
+                  }}
+                  resizeMode="contain"
+                />
+              </View>
+            )}
+            snapToInterval={imageWidth} // Para hacer el scroll con efecto de "snap"
+            decelerationRate="fast"
+          />
+        </View>
+
+        {/* Contenedor del mapa */}
+<View style={{
+  position: 'absolute',
+  bottom: 190,
+  left: 0,
+  right: 0,
+  width: '100%',
+  height: 400,
+}}>
+  <MapView
+    ref={mapRef}
+    style={{ flex: 1 }}
+    initialRegion={{
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude,
+      latitudeDelta: 0.01,
+      longitudeDelta: 0.01,
+    }}
+    showsUserLocation={true}
+    customMapStyle={mapStyle} // Estilo nocturno
+    onMapReady={() => {
+      if (location && mapRef.current) {
+        mapRef.current.setCamera({
+          center: {
+            latitude: location.coords.latitude,
+            longitude: location.coords.longitude,
+          },
+          pitch: 60, // Vista inclinada (3D)
+          heading: 0,
+          zoom: 15,
+          altitude: 500,
+        });
+      }
+    }}
+  >
+    {/* Muestra el Polyline solo si hay un viaje activo */}
+    {isTracking && (
+      <Polyline
+        coordinates={routeCoordinates}
+        strokeColor="#FFB85A" // Color de la línea del viaje
+        strokeWidth={5}
+      />
+    )}
+  </MapView>
+</View>
+      </>
+    ) : (
+      <ActivityIndicator size="large" color="#FFB85A" />
+    )}
+
+    {/* Contenedor fijado en la parte inferior */}
+    <View
+      style={[
+        styles.bottomContainer,
+        {
+          backgroundColor: isDarkMode ? '#1d2637' : '#f9f9f9',
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          padding: 20, // Puedes ajustar el padding según sea necesario
+        },
+      ]}>
+      {!tripEnded ? (
+        <>
+          <Text style={[styles.sectionTitle, { color: isDarkMode ? '#FFB85A' : '#FFB85A' }]}>Registrar Monto del Viaje</Text>
+
+          <TextInput
+            style={[styles.input, { backgroundColor: isDarkMode ? '#323e54' : '#fff', color: isDarkMode ? '#fff' : '#000' }]}
+            placeholder="Ingresa el monto cobrado"
+            placeholderTextColor={isDarkMode ? '#FFB85A' : '#666'}
+            keyboardType="numeric"
+            onChangeText={setPrice}
+            value={price}
+          />
+
+          <View style={[styles.buttonContainer, { backgroundColor: isTracking ? "#323e54" : "#FFB85A" }]}>
+            <TouchableOpacity
+              onPress={
+                isTracking
+                  ? () =>
+                      Alert.alert(
+                        "Finalizar Viaje",
+                        `¿El monto final sigue igual?\n\nMonto final cobrado: $${parseFloat(price || "0").toFixed(2)}`,
+                        [
+                          {
+                            text: "Modificar",
+                            style: "cancel",
+                            onPress: () => console.log("Edición del monto permitida."),
+                          },
+                          {
+                            text: "Sí, finalizar",
+                            onPress: stopTracking, // Llama a la función para finalizar el viaje
+                          },
+                        ]
+                      )
+                  : startTracking // Llama a la función para iniciar el seguimiento del viaje
+              }
+            >
+              <Text style={styles.buttonText}>
+                {String(isTracking ? "Finalizar Viaje" : "Iniciar Viaje")}
+              </Text>
+            </TouchableOpacity>
+      </View>
+
+
+    {/* Contadores de distancia y tiempo */}
+      {isTracking && (
+        <View style={[styles.infoContainer, { backgroundColor: isDarkMode ? '#FFB85A' : '#FFB85A' }]}>
+          <View style={[styles.infoBox, { backgroundColor: isDarkMode ? '#323e54' : '#fff' }]}>
+            <Text style={[styles.infoLabel, { color: isDarkMode ? '#FFB85A' : '#333' }]}>Distancia:</Text>
+            <Text style={[styles.infoValue, { color: isDarkMode ? '#fff' : '#FFB85A' }]}>
+              {distance.toFixed(2)} km
+            </Text>
+          </View>
+          <View style={[styles.infoBox, { backgroundColor: isDarkMode ? '#323e54' : '#fff' }]}>
+            <Text style={[styles.infoLabel, { color: isDarkMode ? '#FFB85A' : '#333' }]}>Tiempo:</Text>
+            <Text style={[styles.infoValue, { color: isDarkMode ? '#fff' : '#FFB85A' }]}>
+              {convertTime(time)}
+            </Text>
+          </View>
+        </View>
+    )}
   </>
 ) : (
-  <ActivityIndicator size="large" color="#0000ff" />
-)}
-
-
-<View style={styles.bottomContainer}>
-  {!tripEnded ? (
-    <>
-      <Text style={styles.sectionTitle}>Registrar Monto del Viaje</Text>
-
-      <TextInput
-        style={styles.input}
-        placeholder="Ingresa el monto cobrado"
-        keyboardType="numeric"
-        onChangeText={setPrice}
-        value={price}
-      />
-
-      <View style={styles.buttonContainer}>
-        <Button
-          title={isTracking ? "Finalizar Viaje" : "Iniciar Viaje"}
-          onPress={
-            isTracking
-              ? () =>
-                  Alert.alert(
-                    "Finalizar Viaje",
-                    `¿El monto final sigue igual?\n\nMonto final cobrado: $${parseFloat(price || "0").toFixed(2)}`,
-                    [
-                      {
-                        text: "Modificar",
-                        style: "cancel",
-                        onPress: () => console.log("Edición del monto permitida."),
-                      },
-                      {
-                        text: "Sí, finalizar",
-                        onPress: stopTracking, // Llama a la función para finalizar el viaje
-                      },
-                    ]
-                  )
-              : startTracking
-          }
-          color={isTracking ? "#FF5733" : "#007BFF"}
-        />
-      </View>
-
-      <View style={styles.infoContainer}>
-        <View style={styles.infoBox}>
-          <Text style={styles.infoLabel}>Distancia:</Text>
-          <Text style={styles.infoValue}>{distance.toFixed(2)} km</Text>
-        </View>
-        <View style={styles.infoBox}>
-          <Text style={styles.infoLabel}>Tiempo:</Text>
-          <Text style={styles.infoValue}>{convertTime(time)}</Text>
-        </View>
-      </View>
-    </>
-  ) : (
-    <>
-	
-	
-	
-            
-<Text style={styles.tripStatus}>ÚLTIMO VIAJE REGISTRADO</Text>
-            <View style={styles.lastTripContainer}>
-   {/*Contenedor de 70% para los detalles del viaje*/} 
-  <View style={styles.detailsContainer}>
-    <Text style={styles.infoText}>ID: {generateId()}</Text>
-    <Text style={styles.infoText}>Fecha: {endDate}</Text>
-    <Text style={styles.infoText}>Hora de inicio: {startTime}</Text>
-    <Text style={styles.infoText}>Hora de fin: {endTime}</Text>
-    <Text style={styles.infoText}>Duración: {convertTime(time)}</Text>
-    <Text style={styles.infoText}>Distancia: {distance.toFixed(2)} km</Text>
-	<Text style={styles.infoText}>Monto cobrado: ${parseFloat(price || '0').toFixed(2)}</Text>
-    <Text style={styles.restaText}>Comisión: ${calculateComision().toFixed(2)}</Text>
-   <Text style={styles.infoText}>Mant.|5000km: ${costoMantenimiento}</Text>
-    <Text style={styles.restaText}>Costo Mant./Viaje: ${mantenimientoParcial}</Text>
-    <Text style={styles.infoText}>Cta./Semana: ${pagoCuentaSemana}</Text>
-    <Text style={styles.restaText}>Costo Cta./Viaje: ${calculateCtaHora().toFixed(4)}</Text>
-    <Text style={styles.infoText}>Renta celular: ${rentaCelular}</Text>
-    <Text style={styles.restaText}>Costo Cel/Viaje: ${calculateDatosHora().toFixed(4)}</Text>
-    <Text style={styles.infoText}>Consumo (L/km): {(consumo / 100).toFixed(4)}</Text>
-    <Text style={styles.infoText}>Gasolina: {precioGasolina}</Text>
-    <Text style={styles.restaText}>Costo Gas/Viaje: ${costoGasolina}</Text>
-	<Text style={styles.infoText}>Seguro: ${costoSeguro}</Text>
-	
-	<Text style={styles.restaText}>Costo Seguro/Viaje: ${calculateSeguroHora().toFixed(4)}</Text>
-	<Text style={styles.text}>Total Gastos del Día: ${totalGastosDia}</Text>
-	
-	<Text style={styles.text}>
-          <Text style={styles.boldText}> Recorridos:</Text> {kmRecorridos} km}</Text>
-        
- 
- </View>
- 
+  <>
+  
+  
   
 
-  {/* Contenedor de 30% para Monto cobrado y Neto */}
-  <View style={styles.summaryContainer}>
-    <View style={styles.montoContainer}>
-      <Text style={styles.montoLabel}>Cobrado $</Text>
-      <Text style={styles.montoValue}>${parseFloat(price || '0').toFixed(2)}</Text>
+
+<Text style={[styles.tripStatus, { color: isDarkMode ? '#FFB85A' : '#000' }]}>
+  ÚLTIMO VIAJE REGISTRADO
+</Text>
+
+<TouchableOpacity 
+  style={[styles.lastTripContainer, { backgroundColor: isDarkMode ? '#323e54' : '#f9f9f9' }]} 
+>
+  {/* Contenedor principal */}
+  <View style={[styles.mainContainer, { backgroundColor: isDarkMode ? '#323e54' : '#fff' }]}>
+    
+    {/* Botón "Ver Detalles" centrado */}
+    <View style={[styles.centeredView, { backgroundColor: isDarkMode ? '#1d2637' : '#e9e9e9' }]}>
+      <TouchableOpacity 
+        onPress={() => navigation.navigate('Historial')} 
+        style={[styles.idContainer, { backgroundColor: isDarkMode ? '#1d2637' : '#e9e9e9' }]}
+      >
+        <Text style={[styles.infoText, { color: isDarkMode ? '#FFB85A' : '#000' }]}>
+          Ver Detalles
+        </Text>
+      </TouchableOpacity>
     </View>
-    <View style={styles.montoContainer}>
-      <Text style={styles.montoLabel}>Neto $</Text>
-      <Text style={styles.montoValue}>
-        {(price - calculateComision() - mantenimientoParcial - calculateCtaHora() - calculateDatosHora() - calculateSeguroHora() - costoGasolina).toFixed(2)}
+
+    {/* Contenedor para el monto cobrado */}
+    <View style={[styles.amountWrapper, { backgroundColor: isDarkMode ? '#1d2637' : '#e9e9e9' }]}>
+      <Text style={[styles.infoTextvalue, { color: isDarkMode ? '#fff' : '#000' }]}>
+        Cobrado: ${parseFloat(price || '0').toFixed(2)}
       </Text>
     </View>
-  </View>
-</View>
 
-            <Button title="Iniciar Nuevo Viaje" onPress={startNewTrip} color="#28a745" />
-          </>
-        )}
-      </View>
+    {/* Contenedor para el monto neto */}
+    <View style={[styles.amountWrapper, { backgroundColor: isDarkMode ? '#1d2637' : '#e9e9e9' }]}>
+      <Text style={[styles.infoTextvalue, { color: isDarkMode ? '#fff' : '#000' }]}>
+        Neto: ${(price - calculateComision() - mantenimientoParcial - calculateCtaHora() - calculateDatosHora() - calculateSeguroHora() - costoGasolina).toFixed(2)}
+      </Text>
     </View>
-  );
-};
+
+    {/* Contenedor para duración y distancia */}
+    <View style={[styles.detailsContainer, { backgroundColor: isDarkMode ? '#1d2637' : '#e9e9e9' }]}>
+      <Text style={[styles.infoTextcons, { color: isDarkMode ? '#fff' : '#000' }]}>
+        Duración: {convertTime(time)}
+      </Text>
+      <Text style={[styles.infoTextcons, { color: isDarkMode ? '#fff' : '#000' }]}>
+        Distancia: {distance.toFixed(2)} km
+      </Text>
+    </View>
+
+  </View>
+</TouchableOpacity>
+
+<TouchableOpacity
+  onPress={startNewTrip}
+  style={[
+    styles.buttonN,
+    { backgroundColor: isDarkMode ? '#FFB85A' : '#FFB85A' },
+  ]}
+>
+  <Text style={[styles.buttonText, { color: isDarkMode ? '#fff' : '#fff' }]}>
+    Iniciar Nuevo Viaje
+  </Text>
+</TouchableOpacity>
+
+</>
+	  )}
+	</View>
+
+		</View>
+	  );
+	};
 
 
 
@@ -656,7 +847,7 @@ const mapStyle = [
   {
     elementType: "geometry", stylers: [{ color: "#212121" }],},
   {
-    elementType: "labels.icon", stylers: [{ visibility: "off" }],
+    elementType: "labels.icon", stylers: [{ visibility: "on" }],
   },
   {
     elementType: "labels.text.fill", stylers: [{ color: "#757575" }],
@@ -684,100 +875,135 @@ const mapStyle = [
     featureType: "water",
     elementType: "labels.text.fill", stylers: [{ color: "#3d3d3d" }],
   },
+  
 ];
 
 
+
 const styles = StyleSheet.create({
-  // Estilos principales
-  container: {
-    flex: 1,
-    backgroundColor: "#ffffff",
-    padding: 10,
+
+
+
+centeredView: {
+    flexDirection: 'row', // Hacemos que el contenido se apile de forma horizontal
+    justifyContent: 'center', // Centrado horizontal
+    alignItems: 'center', // Centrado vertical
+    marginVertical: 10, // Opcional, para un pequeño espacio vertical
+	borderRadius: 10,
+	
   },
   
-  // Menú superior
-  topMenu: {
+  
+ // Estilo general para el contenedor principal
+  lastTripContainer: {
+    flexDirection: "column",
+    width: "100%",
+    marginTop: 10,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderRadius: 10,
+    backgroundColor: "#f1f1f1",
+  },
+
+  // Contenedor principal único
+  mainContainer: {
+    flexDirection: "column",
+    justifyContent: "space-between", // Para distribuir el espacio
+    marginBottom: 20,
+  },
+
+  // Contenedor que agrupa los montos Cobrado y Neto
+  amountWrapper: {
+  width: "100%",  // Asegura que el contenedor ocupe el ancho completo
+  marginBottom: 15,
+  padding: 10,
+  backgroundColor: "#000", // Fondo blanco para diferenciar
+  borderRadius: 10,
+  borderWidth: 2,
+  borderColor: "#FFB85A", // Borde azul para resaltar
+  elevation: 5,
+  shadowColor: "#000",
+  shadowOffset: { width: 0, height: 2 },
+  shadowOpacity: 0.2,
+  shadowRadius: 5,
+},
+
+  // Contenedor para los montos (Cobrado y Neto)
+  amountContainer: {
+    marginBottom: 0,
+	alignItems: "center",
+  },
+
+  // Fila para alinear icono y texto
+  row: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    padding: 10,
-    backgroundColor: "#FFFFFF",
-    borderBottomWidth: 2,
-    borderBottomColor: "#E0E0E0",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 5,
-    elevation: 3,
-    borderRadius: 8,
-  },
-  menuButton: {
-    flex: 1,
-    marginHorizontal: 1,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 5,
-    backgroundColor: "#007BFF",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  menuButtonText: {
-    fontSize: 14,
-    color: "#fff",
-    fontWeight: "500",
+    marginBottom: 0,
   },
 
-  // Texto plataforma
-  plataformaText: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#007BFF",
-    alignSelf: "center",
+  // Estilo para los contenedores individuales
+  idContainer: {
+    marginBottom: 5,
+	padding: 10,
+	borderRadius: 8,
   },
 
+ 
   // Contenedor inferior
   bottomContainer: {
     padding: 20,
     backgroundColor: "#ffffff",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    borderTopLeftRadius: 35,
+    borderTopRightRadius: 35,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 5,
+    shadowOpacity: 1,
+    shadowRadius: 30,
+    elevation: 10,
   },
 
+  
   // Botones
   buttonContainer: {
-    marginVertical: 10,
-    borderRadius: 8,
-    overflow: "hidden",
-    shadowColor: "#007BFF",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
-    elevation: 4,
-  },
-  button: {
-    backgroundColor: "#007BFF",
-    padding: 12,
-    borderRadius: 8,
-    alignItems: "center",
-    marginVertical: 5,
-  },
-  buttonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "bold",
-  },
+  marginVertical: 10,
+  borderRadius: 8,
+  overflow: "hidden",
+  shadowColor: "#000",
+  shadowOffset: { width: 0, height: 4 },
+  shadowOpacity: 0.3,
+  shadowRadius: 5,
+  elevation: 4,
+},
 
+buttonN: {
+  marginVertical: 10,
+  borderRadius: 8,
+  overflow: "hidden",
+  shadowColor: "#000",
+  shadowOffset: { width: 0, height: 4 },
+  shadowOpacity: 0.3,
+  shadowRadius: 5,
+  elevation: 4,
+},
+buttonText: {
+  color: "#fff", // Texto blanco para mejor contraste
+  textAlign: "center",
+  paddingVertical: 12,
+  fontSize: 16,
+  fontWeight: "bold",
+  
+},
+
+  
+  
+  
   // Entrada de texto
   input: {
     height: 50,
-    borderColor: "#007BFF",
+    borderColor: "#ffb85a",
     borderWidth: 1,
-    borderRadius: 8,
+    borderRadius: 20,
     marginBottom: 5,
     paddingHorizontal: 15,
     backgroundColor: "#f8f9fa",
@@ -789,6 +1015,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     marginTop: 20,
+    padding: 15,
+    width: "100%", // Asegura que el contenedor ocupe todo el ancho disponible
+    borderRadius: 20,
+    elevation: 5,
   },
   infoBox: {
     flex: 1,
@@ -821,15 +1051,19 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     width: "100%",
     marginTop: 10,
+	marginBottom: 10,
     padding: 10,
     borderWidth: 1,
-    borderColor: "#ddd",
+    borderColor: "#FFB85A",
     borderRadius: 10,
     backgroundColor: "#f1f1f1",
   },
   detailsContainer: {
-    width: "60%",
-    paddingRight: 10,
+    width: "100%",
+    paddingRight: 0,
+	textAlign: "center",
+	borderRadius: 10,
+	
   },
   summaryContainer: {
     width: "40%",
@@ -849,7 +1083,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#007BFF",
     padding: 15,
     borderRadius: 8,
-    width: "110%",
+    width: "100%", // Ajuste para ocupar el 100% del contenedor
     marginBottom: 30,
     alignItems: "center",
     shadowColor: "#000",
@@ -858,26 +1092,27 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
-  montoLabel: {
-    fontSize: 10,
-    fontWeight: "bold",
-    color: "#fff",
-    marginBottom: 5,
-  },
-  montoValue: {
-    fontSize: 26,
-    fontWeight: "800",
-    color: "#fff",
-  },
+  
+  
   infoText: {
+    fontSize: 20,
+    marginBottom: 0,
+	
+	
+  },
+  
+  infoTextvalue: {
+    fontSize: 20,
+    marginBottom: 0,
+  },
+  
+  infoTextcons: {
     fontSize: 14,
     marginBottom: 5,
+	alignItems: "center",
+	textAlign: "center",
   },
-  restaText: {
-    fontSize: 14,
-    color: "red",
-    marginBottom: 5,
-  },
+  
 
   // Contadores
   counterContainer: {
@@ -899,12 +1134,7 @@ const styles = StyleSheet.create({
     marginBottom: 5,
     letterSpacing: 1.1,
   },
-  mediumText: {
-    color: "#007BFF",
-    fontSize: 28,
-    fontWeight: "600",
-    textAlign: "center",
-  },
+  
 
   // Estado del viaje
   tripStatus: {
@@ -914,7 +1144,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     color: "#007BFF",
   },
-
+  
   // Títulos de sección
   sectionTitle: {
     fontSize: 20,
@@ -923,6 +1153,9 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginBottom: 10,
   },
+ 
+
+  
 });
 
 
