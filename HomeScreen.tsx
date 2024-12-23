@@ -10,9 +10,24 @@ import { ScrollView, Keyboard, } from 'react-native';
 import { useTheme } from "../context/ThemeContext";
 import { FontAwesome } from "@expo/vector-icons";
 import axios from 'axios';
+import * as TaskManager from 'expo-task-manager';
+import * as Location from 'expo-location';
 
+const LOCATION_TASK_NAME = 'background-location-task';
+
+TaskManager.defineTask(LOCATION_TASK_NAME, ({ data, error }) => {
+  if (error) {
+    console.error(error);
+    return;
+  }
+  if (data) {
+    const { locations } = data;
+    // Manejar la ubicación recibida (puedes guardar en AsyncStorage, actualizar el estado, etc.)
+    console.log('Received new locations', locations);
+  }
+});
 const HomeScreen = () => {
-const { isDarkMode } = useTheme(); // Obtener el estado del modo oscuro
+  const { isDarkMode } = useTheme(); // Obtener el estado del modo oscuro
   const navigation = useNavigation();
   const [location, setLocation] = useState(null);
   const [distance, setDistance] = useState<number>(0);
@@ -49,10 +64,8 @@ const { isDarkMode } = useTheme(); // Obtener el estado del modo oscuro
   const [routeCoordinates, setRouteCoordinates] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchedLocation, setSearchedLocation] = useState(null);
-  
 
-  
-   // Configurar la barra superior según el modo claro/oscuro
+  // Configurar la barra superior según el modo claro/oscuro
   React.useLayoutEffect(() => {
     navigation.setOptions({
       headerStyle: {
@@ -61,7 +74,7 @@ const { isDarkMode } = useTheme(); // Obtener el estado del modo oscuro
       headerTintColor: isDarkMode ? '#FFB85A' : '#1d2637', // Cambia el color del texto de la barra superior
     });
   }, [navigation, isDarkMode]);
-  
+
   const toggleTrip = () => {
     setIsTripStarted((prev) => !prev);
     Animated.timing(slideAnim, {
@@ -70,8 +83,7 @@ const { isDarkMode } = useTheme(); // Obtener el estado del modo oscuro
       useNativeDriver: true,
     }).start();
   };
-  
-  
+
   // Función para cargar datos del último viaje
   const loadLastTrip = async () => {
     try {
@@ -81,313 +93,307 @@ const { isDarkMode } = useTheme(); // Obtener el estado del modo oscuro
       if (historial.length > 0) {
         const lastTrip = historial[historial.length - 1]; // Último viaje registrado
         setLastTrip(lastTrip);
-
-       
-        }
-      
+      }
     } catch (error) {
       console.error("Error al cargar el historial:", error);
     }
   };
 
   // Cargar datos al enfocar la pantalla
-useFocusEffect(
-  React.useCallback(() => {
-    const fetchLastTrip = async () => {
-      await loadLastTrip(); // Llama a la función que carga el último viaje
-    };
+  useFocusEffect(
+    React.useCallback(() => {
+      const fetchLastTrip = async () => {
+        await loadLastTrip(); // Llama a la función que carga el último viaje
+      };
 
-    fetchLastTrip(); // Ejecuta la función al enfocarse
-  }, [])
-);
-
-
-
- 
-
-
-const mapRef = useRef(null);
-
-useFocusEffect(
-  React.useCallback(() => {
-const loadData = async () => {
-  try {
-    const storedPlataforma = await AsyncStorage.getItem("plataforma");
-    const storedVehiculo = await AsyncStorage.getItem("vehiculo");
-    const storedTipoGasolina = await AsyncStorage.getItem("tipoGasolina");
-	const storedGastosDiarios = await AsyncStorage.getItem("gastosDiarios")
-// Obtener la fecha de hoy en formato 'YYYY-MM-DD'
-	const fechaHoy = new Date().toLocaleDateString();
-   
-// Procesar gastos diarios
-if (storedGastosDiarios) {
-  const gastosDiarios = JSON.parse(storedGastosDiarios);
-
-  // Filtrar los gastos que corresponden al día de hoy
-  const gastosHoy = gastosDiarios.filter((gasto) => {
-    const fechaGasto = new Date(gasto.fecha).toLocaleDateString();
-    return fechaGasto === fechaHoy; // Comparar solo la fecha (sin hora)
-  });
-
-  // Sumar los montos de los gastos de hoy
-  const totalHoy = gastosHoy.reduce((acc, gasto) => acc + parseFloat(gasto.monto), 0);
-
-  // Guardar el total de los gastos de hoy en el estado
-  setTotalGastosDia(totalHoy.toFixed(2));
-}
-	  
-
-   if (storedTipoGasolina) {
-      const precio = preciosGasolina[storedTipoGasolina];
-      setPrecioGasolina(`$${precio}`);
-    } else {
-      setPrecioGasolina("No seleccionada");
-    }
-
-    if (storedPlataforma) setPlataforma(storedPlataforma);
-
-    if (storedVehiculo) {
-      const vehiculo = JSON.parse(storedVehiculo);
-      setCostoMantenimiento(vehiculo.costoMantenimiento || "0");
-      setPagoCuentaSemana(vehiculo.montoCuenta || "0");
-      setRentaCelular(vehiculo.rentaCelular || "0");
-	  setcostoSeguro(vehiculo.costoSeguro || "0");
-	 
-      setConsumo(vehiculo.consumo || "No disponible");
-	  setkmRecorridos(vehiculo.kmRecorridos || "No disponible");
-      setConsumoL100km(vehiculo.consumo || "No disponible");  // Asegúrate de que este campo también se obtiene
-	  
-    }
-  } catch (error) {
-    console.log("Error al recuperar datos:", error);
-  }
-};
-
-
-    loadData();
-
-    // Solicitar permisos de ubicación
-    (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        console.log("Permission to access location was denied");
-      } else {
-        const currentLocation = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.High,
-        });
-        setLocation(currentLocation);
-      }
-    })();
-  }, [])  // Dependencias vacías
-);
-
-// Define precios de gasolina y demás lógica
-const preciosGasolina = {
-  91: 0.85,
-  95: 0.88,
-  diésel: 0.79,
-};
-
-
-
-const startTracking = async () => {
-Keyboard.dismiss();
-  if (!price) {
-    alert("Por favor, ingrese el monto cobrado antes de iniciar el viaje.");
-    return;
-  }
-
-  setIsTracking(true);
-  setDistance(10); // Establecer distancia inicial a 0
-  setTime(3600); // Establecer tiempo inicial a 0
-  setTripEnded(false);
-
-  const currentTime = new Date();
-  setStartTime(formatTime(currentTime)); // Hora de inicio con formato
-  setEndTime(formatTime(currentTime)); // Hora de inicio con formato
-  setEndDate(formatDate(currentTime)); // Fecha de inicio con formato
-
-  // Iniciar seguimiento de la ubicación
-  let watch = await Location.watchPositionAsync(
-    {
-      accuracy: Location.Accuracy.High,
-      timeInterval: 1000, // Actualiza cada 1 segundo
-      distanceInterval: 1, // Actualiza cada 1 metro
-    },
-    (newLocation) => {
-      if (lastLocation.current) {
-        const dist = getDistance(lastLocation.current.coords, newLocation.coords);
-        setDistance((prevDistance) => prevDistance + dist); // Actualizar distancia
-      }
-      lastLocation.current = newLocation;
-      setLocation(newLocation); // Actualizar ubicación actual
-    }
+      fetchLastTrip(); // Ejecuta la función al enfocarse
+    }, [])
   );
-  setWatchId(watch);
-  startTimer(); // Iniciar contador de tiempo
-};
 
-const stopTracking = async () => {
-  console.log("Deteniendo el seguimiento...");
+  const mapRef = useRef(null);
 
-  if (watchId) {
-    watchId.remove(); // Detener el seguimiento de la ubicación
-  }
+  useFocusEffect(
+    React.useCallback(() => {
+      const loadData = async () => {
+        try {
+          const storedPlataforma = await AsyncStorage.getItem("plataforma");
+          const storedVehiculo = await AsyncStorage.getItem("vehiculo");
+          const storedTipoGasolina = await AsyncStorage.getItem("tipoGasolina");
+          const storedGastosDiarios = await AsyncStorage.getItem("gastosDiarios");
+          // Obtener la fecha de hoy en formato 'YYYY-MM-DD'
+          const fechaHoy = new Date().toLocaleDateString();
 
-  setIsTracking(false);
-  setTripEnded(true);
+          // Procesar gastos diarios
+          if (storedGastosDiarios) {
+            const gastosDiarios = JSON.parse(storedGastosDiarios);
 
-  const currentTime = new Date();
-  setEndTime(formatTime(currentTime)); // Hora de fin con formato
-  setEndDate(formatDate(currentTime)); // Fecha de fin con formato
+            // Filtrar los gastos que corresponden al día de hoy
+            const gastosHoy = gastosDiarios.filter((gasto) => {
+              const fechaGasto = new Date(gasto.fecha).toLocaleDateString();
+              return fechaGasto === fechaHoy; // Comparar solo la fecha (sin hora)
+            });
 
-  console.log("Hora de fin:", currentTime.toLocaleTimeString());
-  stopTimer(); // Detener el contador de tiempo
-  await saveTrip(); // Guardar el viaje al finalizar
-};
+            // Sumar los montos de los gastos de hoy
+            const totalHoy = gastosHoy.reduce((acc, gasto) => acc + parseFloat(gasto.monto), 0);
 
-const getDistance = (coords1, coords2) => {
-  const rad = (x) => (x * Math.PI) / 180;
-  const R = 6371; // Radio de la Tierra en km
-  const dLat = rad(coords2.latitude - coords1.latitude);
-  const dLon = rad(coords2.longitude - coords1.longitude);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(rad(coords1.latitude)) *
+            // Guardar el total de los gastos de hoy en el estado
+            setTotalGastosDia(totalHoy.toFixed(2));
+          }
+
+          if (storedTipoGasolina) {
+            const precio = preciosGasolina[storedTipoGasolina];
+            setPrecioGasolina(`$${precio}`);
+          } else {
+            setPrecioGasolina("No seleccionada");
+          }
+
+          if (storedPlataforma) setPlataforma(storedPlataforma);
+
+          if (storedVehiculo) {
+            const vehiculo = JSON.parse(storedVehiculo);
+            setCostoMantenimiento(vehiculo.costoMantenimiento || "0");
+            setPagoCuentaSemana(vehiculo.montoCuenta || "0");
+            setRentaCelular(vehiculo.rentaCelular || "0");
+            setcostoSeguro(vehiculo.costoSeguro || "0");
+
+            setConsumo(vehiculo.consumo || "No disponible");
+            setkmRecorridos(vehiculo.kmRecorridos || "No disponible");
+            setConsumoL100km(vehiculo.consumo || "No disponible");  // Asegúrate de que este campo también se obtiene
+          }
+        } catch (error) {
+          console.log("Error al recuperar datos:", error);
+        }
+      };
+
+      loadData();
+
+      // Solicitar permisos de ubicación
+      (async () => {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") {
+          console.log("Permission to access location was denied");
+        } else {
+          const currentLocation = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.High,
+          });
+          setLocation(currentLocation);
+        }
+      })();
+    }, [])  // Dependencias vacías
+  );
+
+  // Define precios de gasolina y demás lógica
+  const preciosGasolina = {
+    91: 0.85,
+    95: 0.88,
+    diésel: 0.79,
+  };
+
+  const startTracking = async () => {
+    Keyboard.dismiss();
+    if (!price) {
+      alert("Por favor, ingrese el monto cobrado antes de iniciar el viaje.");
+      return;
+    }
+
+    setIsTracking(true);
+    setDistance(10); // Establecer distancia inicial a 0
+    setTime(3600); // Establecer tiempo inicial a 0
+    setTripEnded(false);
+
+    const currentTime = new Date();
+    setStartTime(formatTime(currentTime)); // Hora de inicio con formato
+    setEndTime(formatTime(currentTime)); // Hora de inicio con formato
+    setEndDate(formatDate(currentTime)); // Fecha de inicio con formato
+
+    // Iniciar seguimiento de la ubicación
+    let watch = await Location.watchPositionAsync(
+      {
+        accuracy: Location.Accuracy.High,
+        timeInterval: 1000, // Actualiza cada 1 segundo
+        distanceInterval: 1, // Actualiza cada 1 metro
+      },
+      (newLocation) => {
+        if (lastLocation.current) {
+          const dist = getDistance(lastLocation.current.coords, newLocation.coords);
+          setDistance((prevDistance) => prevDistance + dist); // Actualizar distancia
+        }
+        lastLocation.current = newLocation;
+        setLocation(newLocation); // Actualizar ubicación actual
+      }
+    );
+    setWatchId(watch);
+    startTimer(); // Iniciar contador de tiempo
+
+    // Iniciar tareas en segundo plano
+    await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
+      accuracy: Location.Accuracy.High,
+      timeInterval: 1000,
+      distanceInterval: 1,
+      showsBackgroundLocationIndicator: true,
+      foregroundService: {
+        notificationTitle: 'Tracking your trip',
+        notificationBody: 'Your location is being tracked in the background.',
+      },
+    });
+  };
+
+  const stopTracking = async () => {
+    console.log("Deteniendo el seguimiento...");
+
+    if (watchId) {
+      watchId.remove(); // Detener el seguimiento de la ubicación
+    }
+
+    setIsTracking(false);
+    setTripEnded(true);
+
+    const currentTime = new Date();
+    setEndTime(formatTime(currentTime)); // Hora de fin con formato
+    setEndDate(formatDate(currentTime)); // Fecha de fin con formato
+
+    console.log("Hora de fin:", currentTime.toLocaleTimeString());
+    stopTimer(); // Detener el contador de tiempo
+    await saveTrip(); // Guardar el viaje al finalizar
+
+    // Detener tareas en segundo plano
+    await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
+  };
+
+  const getDistance = (coords1, coords2) => {
+    const rad = (x) => (x * Math.PI) / 180;
+    const R = 6371; // Radio de la Tierra en km
+    const dLat = rad(coords2.latitude - coords1.latitude);
+    const dLon = rad(coords2.longitude - coords1.longitude);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(rad(coords1.latitude)) *
       Math.cos(rad(coords2.latitude)) *
       Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c; // Distancia en km
-};
-
-const startTimer = () => {
-  timerRef.current = setInterval(() => {
-    setTime((prevTime) => prevTime + 1); // Incrementar el tiempo cada segundo
-  }, 1000);
-};
-
-const stopTimer = () => {
-  if (timerRef.current) {
-    clearInterval(timerRef.current); // Detener el temporizador
-    timerRef.current = null;
-  }
-};
-
-const handlePriceChange = (value) => {
-  setPrice(value); // Actualizar monto cobrado
-};
-
-const convertTime = (seconds) => {
-  const minutes = Math.floor(seconds / 60);
-  const sec = seconds % 60;
-  return `${minutes} min ${sec} seg`; // Convertir segundos a formato "minutos:segundos"
-};
-
-const startNewTrip = () => {
-  setDistance(0); // Resetear distancia
-  setTime(0); // Resetear tiempo
-  setPrice(""); // Resetear monto
-  setTripEnded(false); // Indicar que el viaje no ha terminado
-  setIsTracking(false); // Detener el seguimiento
-  setStartTime(null); // Resetear hora de inicio
-  setEndTime(null); // Resetear hora de fin
-  setEndDate(null); // Resetear fecha de fin
-  lastLocation.current = null; // Resetear última ubicación
-};
-
-const calculateComision = () => {
-  const comisiones = {
-    UBER: 0.10, // 10% de comisión para UBER
-    INDRIVE: 0.129, // 12.9% de comisión para INDRIVE
-    LIBRE: 0, // 0% de comisión para LIBRE
-  };
-  return parseFloat(price) * comisiones[plataforma]; // Calcula la comisión en base al monto y plataforma
-};
-
-const generateId = () => {
-  const platformInitials = plataforma === "UBER" ? "UB" : plataforma === "INDRIVE" ? "IN" : "LI";
-  const timestamp = Date.now(); // Generar timestamp único
-  return `${platformInitials}-${timestamp}`;
-};
-
-// Guardar la plataforma seleccionada en AsyncStorage
-const savePlataforma = async (plataformaSeleccionada) => {
-  try {
-    await AsyncStorage.setItem('plataforma', plataformaSeleccionada); // Guardar en AsyncStorage
-  } catch (error) {
-    console.log('Error al guardar la plataforma', error); // Manejar errores
-  }
-};
-
-const saveTrip = async () => {
-  const nuevoViaje = {
-    id: generateId(),
-    horaInicio: startTime,
-    horaFin: endTime,
-    endDate: endDate,
-    distancia: distance.toFixed(2),
-    montoCobrado: price,
-    plataforma: plataforma,
-    comision: calculateComision().toFixed(2),
-    duracion: convertTime(time),
-    costoMantenimiento: costoMantenimiento,
-    costoMantPorViaje: mantenimientoParcial,
-    costoSeguro: costoSeguro,
-    costoSeguroPorViaje: calculateSeguroHora().toFixed(4),
-    totalGastosDia: totalGastosDia,
-    pagoCuentaSemana: pagoCuentaSemana,
-    costoCtaPorViaje: calculateCtaHora().toFixed(4),
-    rentaCelular: rentaCelular,
-    costoCelPorViaje: calculateDatosHora().toFixed(4),
-    consumo: (consumo / 100).toFixed(4),
-    precioGasolina: precioGasolina,
-    costoGasolina: costoGasolina,
-    kmRecorridos: kmRecorridos,
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c; // Distancia en km
   };
 
-  try {
-    const historialActual = await AsyncStorage.getItem('historialViajes');
-    const historial = historialActual ? JSON.parse(historialActual) : [];
-    historial.unshift(nuevoViaje); // Agregar el nuevo viaje al inicio del historial
-    await AsyncStorage.setItem('historialViajes', JSON.stringify(historial)); // Guardar el historial actualizado
-    console.log('Viaje guardado exitosamente');
-  } catch (error) {
-    console.error('Error al guardar el viaje:', error); // Manejar errores
-  }
-};
+  const startTimer = () => {
+    timerRef.current = setInterval(() => {
+      setTime((prevTime) => prevTime + 1); // Incrementar el tiempo cada segundo
+    }, 1000);
+  };
 
+  const stopTimer = () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current); // Detener el temporizador
+      timerRef.current = null;
+    }
+  };
 
-// La fórmula de cálculo de cta parcial
+  const handlePriceChange = (value) => {
+    setPrice(value); // Actualizar monto cobrado
+  };
 
-const calculateCtaHora = (): number => {
-  if (time <= 0) {
-    console.log("La duración del viaje no es válida.");
-    return 0; // O puedes mostrar un mensaje de error si es necesario
-  }
+  const convertTime = (seconds) => {
+    const minutes = Math.floor(seconds / 60);
+    const sec = seconds % 60;
+    return `${minutes} min ${sec} seg`; // Convertir segundos a formato "minutos:segundos"
+  };
 
-  const hoursInMonth = 30 * 24; // Total de horas en un mes (30 días)
-  const durationHours = time / 3600; // Convertir de segundos a horas
-  const ctaPerHour = pagoCuentaSemana / hoursInMonth; // Costo por hora basado en mensual
-  const result = ctaPerHour * durationHours;
-  
-  const formattedResult = result.toFixed(4); // Muestra 4 decimales, por ejemplo
-  console.log("Cta/hora calculado: ", formattedResult); // Ver el valor con decimales
-  console.log("Duración del viaje en horas: ", durationHours); // Ver cuántas horas son
+  const startNewTrip = () => {
+    setDistance(0); // Resetear distancia
+    setTime(0); // Resetear tiempo
+    setPrice(""); // Resetear monto
+    setTripEnded(false); // Indicar que el viaje no ha terminado
+    setIsTracking(false); // Detener el seguimiento
+    setStartTime(null); // Resetear hora de inicio
+    setEndTime(null); // Resetear hora de fin
+    setEndDate(null); // Resetear fecha de fin
+    lastLocation.current = null; // Resetear última ubicación
+  };
 
-  return parseFloat(formattedResult); // Retorna el valor como número
-};
+  const calculateComision = () => {
+    const comisiones = {
+      UBER: 0.10, // 10% de comisión para UBER
+      INDRIVE: 0.129, // 12.9% de comisión para INDRIVE
+      LIBRE: 0, // 0% de comisión para LIBRE
+    };
+    return parseFloat(price) * comisiones[plataforma]; // Calcula la comisión en base al monto y plataforma
+  };
 
+  const generateId = () => {
+    const platformInitials = plataforma === "UBER" ? "UB" : plataforma === "INDRIVE" ? "IN" : "LI";
+    const timestamp = Date.now(); // Generar timestamp único
+    return `${platformInitials}-${timestamp}`;
+  };
 
+  // Guardar la plataforma seleccionada en AsyncStorage
+  const savePlataforma = async (plataformaSeleccionada) => {
+    try {
+      await AsyncStorage.setItem('plataforma', plataformaSeleccionada); // Guardar en AsyncStorage
+    } catch (error) {
+      console.log('Error al guardar la plataforma', error); // Manejar errores
+    }
+  };
 
+  const saveTrip = async () => {
+    const nuevoViaje = {
+      id: generateId(),
+      horaInicio: startTime,
+      horaFin: endTime,
+      endDate: endDate,
+      distancia: distance.toFixed(2),
+      montoCobrado: price,
+      plataforma: plataforma,
+      comision: calculateComision().toFixed(2),
+      duracion: convertTime(time),
+      costoMantenimiento: costoMantenimiento,
+      costoMantPorViaje: mantenimientoParcial,
+      costoSeguro: costoSeguro,
+      costoSeguroPorViaje: calculateSeguroHora().toFixed(4),
+      totalGastosDia: totalGastosDia,
+      pagoCuentaSemana: pagoCuentaSemana,
+      costoCtaPorViaje: calculateCtaHora().toFixed(4),
+      rentaCelular: rentaCelular,
+      costoCelPorViaje: calculateDatosHora().toFixed(4),
+      consumo: (consumo / 100).toFixed(4),
+      precioGasolina: precioGasolina,
+      costoGasolina: costoGasolina,
+      kmRecorridos: kmRecorridos,
+    };
 
-// La fórmula de cálculo de renta celular parcial
+    try {
+      const historialActual = await AsyncStorage.getItem('historialViajes');
+      const historial = historialActual ? JSON.parse(historialActual) : [];
+      historial.unshift(nuevoViaje); // Agregar el nuevo viaje al inicio del historial
+      await AsyncStorage.setItem('historialViajes', JSON.stringify(historial)); // Guardar el historial actualizado
+      console.log('Viaje guardado exitosamente');
+    } catch (error) {
+      console.error('Error al guardar el viaje:', error); // Manejar errores
+    }
+  };
 
-const calculateDatosHora = (): number => {
-  const hoursInMonth = 30 * 24; // Total de horas en un mes (30 días)
-  const durationHours = time / 3600; // Convierte el tiempo del viaje de segundos a horas
+  const calculateCtaHora = (): number => {
+    if (time <= 0) {
+      console.log("La duración del viaje no es válida.");
+      return 0; // O puedes mostrar un mensaje de error si es necesario
+    }
 
-  // Si el usuario no ha definido "Renta Celular", asumimos 0
-  if (!rentaCelular || durationHours <= 0) return 0;
+    const hoursInMonth = 30 * 24; // Total de horas en un mes (30 días)
+    const durationHours = time / 3600; // Convertir de segundos a horas
+    const ctaPerHour = pagoCuentaSemana / hoursInMonth; // Costo por hora basado en mensual
+    const result = ctaPerHour * durationHours;
+
+    const formattedResult = result.toFixed(4); // Muestra 4 decimales, por ejemplo
+    console.log("Cta/hora calculado: ", formattedResult); // Ver el valor con decimales
+    console.log("Duración del viaje en horas: ", durationHours); // Ver cuántas horas son
+
+    return parseFloat(formattedResult); // Retorna el valor como número
+  };
+
+  const calculateDatosHora = (): number => {
+    const hoursInMonth = 30 * 24; // Total de horas en un mes (30 días)
+    const durationHours = time / 3600; // Convierte el tiempo del viaje de segundos a horas
+
+    // Si el usuario no ha definido "Renta Celular", asumimos 0
+    if (!rentaCelular || durationHours <= 0) return
 
   const rentaPorHora = rentaCelular / hoursInMonth; // Costo por hora
   const resultado = rentaPorHora * durationHours; // Calcula el costo proporcional al tiempo del viaje
